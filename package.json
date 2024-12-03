@@ -5,7 +5,7 @@
 	"description": "A HarperDB Component for caching HTTP requests/responses, allowing caching of data from HTTP-level components.",
 	"keywords": [
 		"harperdb",
-		"caching",
+		"caching"
 	],
 	"homepage": "https://github.com/HarperDB/http-cache",
 	"bugs": {
