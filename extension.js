@@ -12,7 +12,7 @@ export function start(options = {}) {
  */
 export function getCacheHandler(options) {
 	return async (request, nextHandler) => {
-		if (request.method === 'POST' && request.url === '/invalidate' && request) {
+		if (request.method === 'POST' && request.url === '/invalidate' && request.user?.role.permission.super_user) {
 			// invalidate the cache
 			let last;
 			for await (let entry of HttpCache.search([], { onlyIfCached: true, noCacheStore: true })) {
@@ -41,7 +41,7 @@ export function getCacheHandler(options) {
 			// else we just let the handler write to the node response object
 			return nextHandler(request);
 		}
-	}
+	};
 }
 
 /**
@@ -111,7 +111,6 @@ HttpCache.sourcedFrom({
 					headers: headersObject,
 					content,
 				});
-
 			}
 		});
 	},
@@ -125,27 +124,30 @@ HttpCache.sourcedFrom({
  * @param value
  */
 export function parseHeaderValue(value) {
-	return value.trim().split(',').map((part) => {
-		let parsed;
-		const components = part.trim().split(';');
-		let component;
-		while ((component = components.pop())) {
-			if (component.includes('=')) {
-				let [name, value] = component.trim().split('=');
-				name = name.trim();
-				if (value) value = value.trim();
-				parsed = {
-					name: name.toLowerCase(),
-					value,
-					next: parsed,
-				};
-			} else {
-				parsed = {
-					name: component.toLowerCase(),
-					next: parsed,
-				};
+	return value
+		.trim()
+		.split(',')
+		.map((part) => {
+			let parsed;
+			const components = part.trim().split(';');
+			let component;
+			while ((component = components.pop())) {
+				if (component.includes('=')) {
+					let [name, value] = component.trim().split('=');
+					name = name.trim();
+					if (value) value = value.trim();
+					parsed = {
+						name: name.toLowerCase(),
+						value,
+						next: parsed,
+					};
+				} else {
+					parsed = {
+						name: component.toLowerCase(),
+						next: parsed,
+					};
+				}
 			}
-		}
-		return parsed;
-	});
+			return parsed;
+		});
 }
