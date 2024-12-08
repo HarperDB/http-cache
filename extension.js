@@ -26,16 +26,32 @@ export function getCacheHandler(options) {
 			// assign the nextHandler so it can be used within the cache resolver
 			request.cacheNextHandler = nextHandler;
 			// use our cache table, using the cacheKey if provided, otherwise use the URL/path
-			let response = await HttpCache.get(request.cacheKey ?? request.url, request);
+			let response = await HttpCacheWithSWR.get(request.cacheKey ?? request.url, request);
 			// if it is a cache miss, we let the handler actually directly write to the node response object
 			// and stream the results to the client, so we don't need to return anything here
 			if (!request._nodeResponse.writableEnded) {
 				// but if we have a cache hit, we can return the cached response
-				return {
-					status: 200,
-					headers: { ...response.headers.toJSON(), 'X-HarperDB-Cache': 'HIT' },
-					body: response.content,
-				};
+				let ifNoneMatch = request.headers.get('If-None-Match');
+				let headers = response.headers.toJSON();
+				const etag = headers.etag;
+				let status = response.status ?? 200;
+				let body;
+				headers = { ...headers, 'X-HarperDB-Cache': 'HIT' };
+				if (ifNoneMatch && ifNoneMatch === etag) {
+					status = 304;
+				} else body = response.content;
+				// for now, everything is being handled by the next.js server that writes to the node response object,
+				// so can just assume that and not try to branch (and have to worry about testing the other branch)
+				//if (request._nodeResponse.wroteHeaders) {
+				request._nodeResponse.writeHead(status, headers);
+				request._nodeResponse.end(body);
+				/*} else {
+					return {
+						status,
+						headers,
+						body,
+					};
+				}*/
 			}
 		} else {
 			// else we just let the handler write to the node response object
@@ -51,6 +67,8 @@ export function getCacheHandler(options) {
 HttpCache.sourcedFrom({
 	async get(path, context) {
 		const request = context.requestContext;
+		if (request.maxAgeSeconds) context.expiresAt = request.maxAgeSeconds * 1000 + Date.now();
+		if (request.allowSWRSeconds) context.expiresSWRAt = request.allowSWRSeconds * 1000 + Date.now();
 		return new Promise((resolve, reject) => {
 			const nodeResponse = request._nodeResponse;
 			if (!nodeResponse) return;
@@ -82,7 +100,7 @@ HttpCache.sourcedFrom({
 				// cache the response, with the headers and content
 				resolve({
 					id: path,
-					headers: nodeResponse._headers,
+					headers: nodeResponse.getHeaders(),
 					content: blocks.length > 1 ? Buffer.concat(blocks) : blocks[0],
 				});
 			};
@@ -104,6 +122,8 @@ HttpCache.sourcedFrom({
 					if (part.name === 'no-cache') context.noCache = true;
 					if (part.name === 'max-age') context.expiresAt = part.value * 1000 + Date.now();
 				});
+				let etag = response.headers.get('ETag') || response.headers.get('Last-Modified');
+				if (!etag) headersObject.ETag = Date.now().toString(32);
 				// TODO: handle streaming responses
 				let content = response.body;
 				resolve({
@@ -116,6 +136,11 @@ HttpCache.sourcedFrom({
 	},
 	name: 'http cache resolver',
 });
+class HttpCacheWithSWR extends HttpCache {
+	allowStaleWhileRevalidate(entry, id) {
+		return entry.value?.expiresSWRAt > Date.now();
+	}
+}
 /**
  * This parser is used to parse header values.
  *
