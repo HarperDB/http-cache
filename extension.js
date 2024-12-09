@@ -1,16 +1,17 @@
+const { Readable } = require('node:stream');
 const { HttpCache } = databases.cache;
 /**
  * Setup the caching middleware
  */
-export function start(options = {}) {
-	const servers = options.server.http(getCacheHandler(options));
-}
+exports.start = function (options = {}) {
+	const servers = options.server.http(exports.getCacheHandler(options));
+};
 
 /**
  * This is the handler that is used to cache the response. It is defined and exported so other middleware can directly
  * use it and set a cacheKey or bypass the cache
  */
-export function getCacheHandler(options) {
+exports.getCacheHandler = function (options) {
 	return async (request, nextHandler) => {
 		if (request.method === 'POST' && request.url === '/invalidate' && request.user?.role.permission.super_user) {
 			// invalidate the cache
@@ -58,7 +59,7 @@ export function getCacheHandler(options) {
 			return nextHandler(request);
 		}
 	};
-}
+};
 
 /**
  * Source the Next.js cache from request resolution using the passed in Next.js request handler,
@@ -68,7 +69,8 @@ HttpCache.sourcedFrom({
 	async get(path, context) {
 		const request = context.requestContext;
 		if (request.maxAgeSeconds) context.expiresAt = request.maxAgeSeconds * 1000 + Date.now();
-		if (request.allowSWRSeconds) context.expiresSWRAt = request.allowSWRSeconds * 1000 + Date.now();
+		if (request.staleWhileRevalidateSeconds)
+			context.expiresSWRAt = request.staleWhileRevalidateSeconds * 1000 + Date.now();
 		return new Promise((resolve, reject) => {
 			const nodeResponse = request._nodeResponse;
 			if (!nodeResponse) return;
@@ -95,8 +97,19 @@ HttpCache.sourcedFrom({
 					if (typeof block === 'string') block = Buffer.from(block);
 					blocks.push(block);
 				}
-				end.call(nodeResponse, block);
 				if (!cacheable) context.noCacheStore = true;
+				if (block instanceof ReadableStream) {
+					const piped = Readable.fromWeb(block).pipe(nodeResponse);
+					piped.on('finish', () => {
+						resolve({
+							id: path,
+							headers: nodeResponse.getHeaders(),
+							//content: blocks.length > 1 ? Buffer.concat(blocks) : blocks[0],
+						});
+					});
+					return;
+				}
+				end.call(nodeResponse, block);
 				// cache the response, with the headers and content
 				resolve({
 					id: path,
@@ -117,7 +130,7 @@ HttpCache.sourcedFrom({
 					headersObject[key] = value;
 				}
 				let cacheControl = response.headers.get('cache-control');
-				parseHeaderValue(cacheControl).forEach((part) => {
+				exports.parseHeaderValue(cacheControl).forEach((part) => {
 					if (part.name === 'no-store') context.noCacheStore = true;
 					if (part.name === 'no-cache') context.noCache = true;
 					if (part.name === 'max-age') context.expiresAt = part.value * 1000 + Date.now();
@@ -148,7 +161,7 @@ class HttpCacheWithSWR extends HttpCache {
  *
  * @param value
  */
-export function parseHeaderValue(value) {
+exports.parseHeaderValue = function (value) {
 	return value
 		.trim()
 		.split(',')
@@ -175,4 +188,4 @@ export function parseHeaderValue(value) {
 			}
 			return parsed;
 		});
-}
+};
