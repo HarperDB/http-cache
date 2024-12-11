@@ -76,12 +76,10 @@ HttpCache.sourcedFrom({
 		return new Promise((resolve, reject) => {
 			const nodeResponse = request._nodeResponse;
 			if (!nodeResponse) return;
-			let cacheable;
 			// intercept the main methods to get and cache the response if the node response is directly used
 			const writeHead = nodeResponse.writeHead;
 			nodeResponse.writeHead = (status, message, headers) => {
 				nodeResponse.setHeader('X-HarperDB-Cache', 'MISS');
-				if (status === 200) cacheable = true;
 				writeHead.call(nodeResponse, status, message, headers);
 			};
 			const blocks = []; // collect the blocks of response data to cache
@@ -99,7 +97,9 @@ HttpCache.sourcedFrom({
 					if (typeof block === 'string') block = Buffer.from(block);
 					blocks.push(block);
 				}
-				if (!cacheable) context.noCacheStore = true;
+				if (nodeResponse.statusCode !== 200) {
+					context.noCacheStore = true;
+				}
 				if (block instanceof ReadableStream) {
 					const piped = Readable.fromWeb(block).pipe(nodeResponse);
 					piped.on('finish', () => {
@@ -127,7 +127,7 @@ HttpCache.sourcedFrom({
 			} else forResponse(response);
 			function forResponse(response) {
 				if (!response) return;
-				if (!cacheable) context.noCacheStore = true;
+				if (response.status !== 200) context.noCacheStore = true;
 				let headersObject = {};
 				for (let [key, value] of response.headers) {
 					headersObject[key] = value;
