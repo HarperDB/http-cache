@@ -69,8 +69,10 @@ HttpCache.sourcedFrom({
 	async get(path, context) {
 		const request = context.requestContext;
 		if (request.maxAgeSeconds) context.expiresAt = request.maxAgeSeconds * 1000 + Date.now();
-		if (request.staleWhileRevalidateSeconds)
-			context.expiresSWRAt = request.staleWhileRevalidateSeconds * 1000 + Date.now();
+		let expiresSWRAt;
+		if (request.staleWhileRevalidateSeconds) {
+			expiresSWRAt = request.staleWhileRevalidateSeconds * 1000 + Date.now();
+		}
 		return new Promise((resolve, reject) => {
 			const nodeResponse = request._nodeResponse;
 			if (!nodeResponse) return;
@@ -113,6 +115,7 @@ HttpCache.sourcedFrom({
 				// cache the response, with the headers and content
 				resolve({
 					id: path,
+					expiresSWRAt,
 					headers: nodeResponse.getHeaders(),
 					content: blocks.length > 1 ? Buffer.concat(blocks) : blocks[0],
 				});
@@ -141,6 +144,7 @@ HttpCache.sourcedFrom({
 				let content = response.body;
 				resolve({
 					id: path,
+					expiresSWRAt,
 					headers: headersObject,
 					content,
 				});
