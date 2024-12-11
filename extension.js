@@ -120,7 +120,9 @@ HttpCache.sourcedFrom({
 					content: blocks.length > 1 ? Buffer.concat(blocks) : blocks[0],
 				});
 			};
-
+			if (!request.cacheNextHandler) {
+				return resolve();
+			}
 			let response = request.cacheNextHandler(request);
 			if (response?.then) {
 				response.then(forResponse);
