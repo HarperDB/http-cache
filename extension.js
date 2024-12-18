@@ -80,6 +80,12 @@ HttpCache.sourcedFrom({
 			const writeHead = nodeResponse.writeHead;
 			nodeResponse.writeHead = (status, message, headers) => {
 				nodeResponse.setHeader('X-HarperDB-Cache', 'MISS');
+				if (Array.isArray(headers?.[0])) {
+					headers = headers.reduce((acc, [key, value]) => {
+						acc[key] = value;
+						return acc;
+					}, {});
+				}
 				writeHead.call(nodeResponse, status, message, headers);
 			};
 			const blocks = []; // collect the blocks of response data to cache
