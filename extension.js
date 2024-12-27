@@ -78,15 +78,15 @@ HttpCache.sourcedFrom({
 			if (!nodeResponse) return;
 			// intercept the main methods to get and cache the response if the node response is directly used
 			const writeHead = nodeResponse.writeHead;
-			nodeResponse.writeHead = (status, message, headers) => {
+			nodeResponse.writeHead = (status, messageOrHeaders, headers) => {
 				nodeResponse.setHeader('X-HarperDB-Cache', 'MISS');
-				if (Array.isArray(headers?.[0])) {
-					headers = headers.reduce((acc, [key, value]) => {
+				if (Array.isArray(messageOrHeaders?.[0])) {
+					messageOrHeaders = messageOrHeaders.reduce((acc, [key, value]) => {
 						acc[key] = value;
 						return acc;
 					}, {});
 				}
-				writeHead.call(nodeResponse, status, message, headers);
+				writeHead.call(nodeResponse, status, messageOrHeaders, headers);
 			};
 			const blocks = []; // collect the blocks of response data to cache
 			const write = nodeResponse.write;
@@ -162,6 +162,10 @@ HttpCache.sourcedFrom({
 	name: 'http cache resolver',
 });
 class HttpCacheWithSWR extends HttpCache {
+	// use directly URL paths for ids
+	static parsePath(path) {
+		return decodeURIComponent(path);
+	}
 	allowStaleWhileRevalidate(entry, id) {
 		return entry.value?.expiresSWRAt > Date.now();
 	}
