@@ -37,7 +37,8 @@ exports.getCacheHandler = function (options) {
 				const etag = headers.etag;
 				let status = response.status ?? 200;
 				let body;
-				headers = { ...headers, 'X-HarperDB-Cache': 'HIT' };
+				let age = Math.round((Date.now() - response.getUpdatedTime()) / 1000);
+				headers = { ...headers, 'X-HarperDB-Cache': 'HIT', Age: age };
 				if (ifNoneMatch && ifNoneMatch === etag) {
 					status = 304;
 				} else body = response.content;
@@ -71,7 +72,8 @@ HttpCache.sourcedFrom({
 		if (request.maxAgeSeconds) context.expiresAt = request.maxAgeSeconds * 1000 + Date.now();
 		let expiresSWRAt;
 		if (request.staleWhileRevalidateSeconds) {
-			expiresSWRAt = request.staleWhileRevalidateSeconds * 1000 + Date.now();
+			// this is the time at which the response can be served stale while revalidating, after the main expiresAt time
+			expiresSWRAt = request.staleWhileRevalidateSeconds * 1000 + (context.expiresAt ?? Date.now());
 		}
 		return new Promise((resolve, reject) => {
 			const nodeResponse = request._nodeResponse;
@@ -173,7 +175,7 @@ class HttpCacheWithSWR extends HttpCache {
 /**
  * This parser is used to parse header values.
  *
- * It is used within this file for parsing the `Cache-Control` and `X-Replicate-To` headers.
+ * It is used within this file for parsing the `Cache-Control` header.
  *
  * @param value
  */
