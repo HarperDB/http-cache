@@ -1,4 +1,5 @@
 const { Readable } = require('node:stream');
+const { createBrotliCompress, brotliDecompress, constants } = require('zlib');
 const { HttpCache } = databases.cache;
 /**
  * Setup the caching middleware
@@ -39,9 +40,22 @@ exports.getCacheHandler = function (options) {
 				let body;
 				let age = Math.round((Date.now() - response.getUpdatedTime()) / 1000);
 				headers = { ...headers, 'X-HarperDB-Cache': 'HIT', Age: age };
+				delete headers['x-harperdb-cache'];
+				delete headers['content-length'];
 				if (ifNoneMatch && ifNoneMatch === etag) {
 					status = 304;
-				} else body = response.content;
+				} else {
+					body = response.content;
+					if (headers['content-encoding'] === 'br' && !request.headers.get('Accept-Encoding').includes('br')) {
+						// if the client doesn't support brotli, we need to decompress the response
+						body = await new Promise((resolve) => brotliDecompress(body, (err, result) => {
+							if (err) reject(err);
+							else resolve(result);
+						}));
+						delete headers['content-encoding'];
+					}
+					headers['Content-Length'] = body.length;
+				}
 				// for now, everything is being handled by the next.js server that writes to the node response object,
 				// so can just assume that and not try to branch (and have to worry about testing the other branch)
 				//if (request._nodeResponse.wroteHeaders) {
@@ -80,8 +94,12 @@ HttpCache.sourcedFrom({
 			if (!nodeResponse) return;
 			// intercept the main methods to get and cache the response if the node response is directly used
 			const writeHead = nodeResponse.writeHead;
+			let encoder;
 			nodeResponse.writeHead = (status, messageOrHeaders, headers) => {
 				nodeResponse.setHeader('X-HarperDB-Cache', 'MISS');
+				let headersObject =  headers ?? messageOrHeaders;
+				getEncoder(headers?.['content-encoding']); // ensure the encoder is created, and Content-Encoding is set as
+				// needed
 				if (Array.isArray(messageOrHeaders?.[0])) {
 					messageOrHeaders = messageOrHeaders.reduce((acc, [key, value]) => {
 						acc[key] = value;
@@ -90,26 +108,70 @@ HttpCache.sourcedFrom({
 				}
 				writeHead.call(nodeResponse, status, messageOrHeaders, headers);
 			};
+			function getEncoder(alreadyEncoded) {
+				if (encoder) return encoder;
+				let encoding = request.headers.get('Accept-Encoding');
+				let accept = request.headers.get('Accept') ?? '';
+				if (encoding.includes('br') && !alreadyEncoded) {
+					nodeResponse.setHeader('Content-Encoding', 'br');
+					nodeResponse.removeHeader('Content-Length');
+					encoder = createBrotliCompress({
+						params: {
+							[constants.BROTLI_PARAM_MODE]:
+								accept.includes('json') || accept.includes('text')
+									? constants.BROTLI_MODE_TEXT
+									: constants.BROTLI_MODE_GENERIC,
+							[constants.BROTLI_PARAM_QUALITY]: 2, // go fast
+						},
+					})
+					encoder.on('data', writeOut);
+					encoder.on('end', endOut);
+				} else {
+					encoder = { // default direct encoder
+						write: writeOut,
+						end: endOut,
+					};
+				}
+				return encoder;
+			}
 			const blocks = []; // collect the blocks of response data to cache
-			const write = nodeResponse.write;
-			nodeResponse.write = (block) => {
+			const writeResponse = nodeResponse.write;
+			const endResponse = nodeResponse.end;
+			function writeOut(block) {
 				if (typeof block === 'string') block = Buffer.from(block);
 				blocks.push(block);
-				write.call(nodeResponse, block);
-			};
-			const end = nodeResponse.end;
-			nodeResponse.end = (block) => {
-				// if the downstream handler is directly writing to the node response object, we need to capture and cache the
-				// response
+				writeResponse.call(nodeResponse, block)
+			}
+			function endOut(block) {
 				if (block) {
 					if (typeof block === 'string') block = Buffer.from(block);
 					blocks.push(block);
 				}
+				endResponse.call(nodeResponse, block);
+				const headers = Object.assign({}, nodeResponse.getHeaders());
+				delete headers['x-harperdb-cache'];
+				delete headers.connection;
+				let etag = headers.etag;
+				if (!etag) headers.etag = Date.now().toString(32);
+				// cache the response, with the headers and content
+				resolve({
+					id: path,
+					expiresSWRAt,
+					headers,
+					content: blocks.length > 1 ? Buffer.concat(blocks) : blocks[0],
+				});
+			}
+			nodeResponse.write = (block) => {
+				getEncoder().write(block);
+			};
+			nodeResponse.end = (block) => {
+				// if the downstream handler is directly writing to the node response object, we need to capture and cache the
+				// response
 				if (nodeResponse.statusCode !== 200) {
 					context.noCacheStore = true;
 				}
 				if (block instanceof ReadableStream) {
-					const piped = Readable.fromWeb(block).pipe(nodeResponse);
+					const piped = Readable.fromWeb(block).pipe(encoder);
 					piped.on('finish', () => {
 						resolve({
 							id: path,
@@ -119,14 +181,7 @@ HttpCache.sourcedFrom({
 					});
 					return;
 				}
-				end.call(nodeResponse, block);
-				// cache the response, with the headers and content
-				resolve({
-					id: path,
-					expiresSWRAt,
-					headers: nodeResponse.getHeaders(),
-					content: blocks.length > 1 ? Buffer.concat(blocks) : blocks[0],
-				});
+				getEncoder().end(block);
 			};
 			if (!request.cacheNextHandler) {
 				return resolve();
