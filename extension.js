@@ -1,5 +1,6 @@
 const { Readable } = require('node:stream');
 const { createBrotliCompress, brotliDecompress, constants } = require('zlib');
+const crypto = require('crypto');
 const { HttpCache } = databases.cache;
 /**
  * Setup the caching middleware
@@ -7,6 +8,7 @@ const { HttpCache } = databases.cache;
 exports.start = function (options = {}) {
 	const servers = options.server.http(exports.getCacheHandler(options));
 };
+const KEY_OVERFLOW = 1000;
 
 /**
  * This is the handler that is used to cache the response. It is defined and exported so other middleware can directly
@@ -29,8 +31,13 @@ exports.getCacheHandler = function (options) {
 			request.cacheNextHandler = nextHandler;
 			let startTime = performance.now();
 			request.startTime = startTime;
+			let cacheKey = request.cacheKey ?? request.url;
+			if (cacheKey.length > KEY_OVERFLOW) {
+				// Harper's max key size is 1936 bytes, so we need to hash the key if it is too long
+				cacheKey = cacheKey.slice(0, KEY_OVERFLOW) + ':' + crypto.createHash('md5').update(cacheKey).digest('hex');
+			}
 			// use our cache table, using the cacheKey if provided, otherwise use the URL/path
-			let response = await HttpCacheWithSWR.get(request.cacheKey ?? request.url, request);
+			let response = await HttpCacheWithSWR.get(cacheKey, request);
 			// if it is a cache miss, we let the handler actually directly write to the node response object
 			// and stream the results to the client, so we don't need to return anything here
 			if (!request._nodeResponse.writableEnded) {
