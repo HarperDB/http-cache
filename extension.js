@@ -27,6 +27,8 @@ exports.getCacheHandler = function (options) {
 		if (request.method === 'GET') {
 			// assign the nextHandler so it can be used within the cache resolver
 			request.cacheNextHandler = nextHandler;
+			let startTime = performance.now();
+			request.startTime = startTime;
 			// use our cache table, using the cacheKey if provided, otherwise use the URL/path
 			let response = await HttpCacheWithSWR.get(request.cacheKey ?? request.url, request);
 			// if it is a cache miss, we let the handler actually directly write to the node response object
@@ -61,6 +63,7 @@ exports.getCacheHandler = function (options) {
 				//if (request._nodeResponse.wroteHeaders) {
 				request._nodeResponse.writeHead(status, headers);
 				request._nodeResponse.end(body);
+				server.recordAnalytics(performance.now() - startTime, 'http-cache-hit', request.pathname);
 				/*} else {
 					return {
 						status,
@@ -160,6 +163,7 @@ HttpCache.sourcedFrom({
 					headers,
 					content: blocks.length > 1 ? Buffer.concat(blocks) : blocks[0],
 				});
+				server.recordAnalytics(performance.now() - request.startTime, 'http-cache-miss', request.pathname);
 			}
 			nodeResponse.write = (block) => {
 				getEncoder().write(block);
