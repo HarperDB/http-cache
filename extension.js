@@ -118,17 +118,29 @@ HttpCache.sourcedFrom({
 				}
 				writeHead.call(nodeResponse, status, messageOrHeaders, headers);
 			};
-			function getEncoder(alreadyEncoded) {
+			let acceptEncoding = request.headers.get('Accept-Encoding');
+			let acceptsBrotli = false;
+			if (acceptEncoding) {
+				// we can only cache brotli responses, so we need to ensure that we are only accepting brotli (or nothing)
+				if (acceptEncoding.includes('br')) {
+					request.headers.set('Accept-Encoding', 'br');
+					acceptsBrotli = true;
+				}
+				else request.headers.delete('Accept-Encoding');
+			}
+			function getEncoder() {
 				if (encoder) return encoder;
-				let encoding = request.headers.get('Accept-Encoding');
-				let accept = request.headers.get('Accept') ?? '';
-				if (encoding.includes('br') && !alreadyEncoded) {
+				let encoding = nodeResponse.getHeader('Content-Encoding');
+				let contentType = nodeResponse.getHeader('Content-Type') ?? '';
+				const alreadyEncoded = encoding === 'br';
+				if (acceptsBrotli && !alreadyEncoded) {
+					// if the client accepts brotli, and it wasn't returned to us in Brotli, we can provide the compression here
 					nodeResponse.setHeader('Content-Encoding', 'br');
 					nodeResponse.removeHeader('Content-Length');
 					encoder = createBrotliCompress({
 						params: {
 							[constants.BROTLI_PARAM_MODE]:
-								accept.includes('json') || accept.includes('text')
+								contentType.includes('json') || contentType.includes('text')
 									? constants.BROTLI_MODE_TEXT
 									: constants.BROTLI_MODE_GENERIC,
 							[constants.BROTLI_PARAM_QUALITY]: 2, // go fast
