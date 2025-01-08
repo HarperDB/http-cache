@@ -9,6 +9,9 @@ exports.start = function (options = {}) {
 	const servers = options.server.http(exports.getCacheHandler(options));
 };
 const KEY_OVERFLOW = 1000;
+// make the cache clearing be gradual so we don't cause a cache stampede
+const CLEAR_REST_INTERVAL_COUNT = 5;
+const CLEAR_REST_INTERVAL_MS = 100;
 
 /**
  * This is the handler that is used to cache the response. It is defined and exported so other middleware can directly
@@ -16,14 +19,24 @@ const KEY_OVERFLOW = 1000;
  */
 exports.getCacheHandler = function (options) {
 	return async (request, nextHandler) => {
-		if (request.method === 'POST' && request.url === '/invalidate' && request.user?.role.permission.super_user) {
+		if (request.method === 'POST' && request.pathname === '/invalidate') {
+			if (!request.user?.role.permission.super_user) {
+				let error = new Error('Unauthorized');
+				error.statusCode = 401;
+				throw error;
+			}
 			// invalidate the cache
 			let last;
-			for await (let entry of HttpCache.search([], { onlyIfCached: true, noCacheStore: true })) {
+			let count = 0;
+			let query_start = request.url.indexOf('?');
+			let query = query_start > -1 ? request.url.slice(query_start) : [];
+			for await (let entry of HttpCache.search(query, { onlyIfCached: true, noCacheStore: true })) {
 				last = HttpCache.delete(entry.id);
+				if (count++ % CLEAR_REST_INTERVAL_COUNT === 0)
+					await new Promise((resolve) => setTimeout(resolve, CLEAR_REST_INTERVAL_MS));
 			}
 			await last;
-			return { status: 200, headers: {}, body: 'Cache invalidated' };
+			return { status: 200, headers: {}, body: `Cache invalidated, invalidated ${count} entries` };
 		}
 		// check if the request is cacheable
 		if (request.method === 'GET') {

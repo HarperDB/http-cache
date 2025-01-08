@@ -1,6 +1,6 @@
 {
 	"name": "@harperdb/http-cache",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"type": "commonjs",
 	"description": "A HarperDB Component for caching HTTP requests/responses, allowing caching of data from HTTP-level components.",
 	"keywords": [
