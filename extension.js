@@ -10,8 +10,8 @@ exports.start = function (options = {}) {
 };
 const KEY_OVERFLOW = 1000;
 // make the cache clearing be gradual so we don't cause a cache stampede
-const CLEAR_REST_INTERVAL_COUNT = 5;
-const CLEAR_REST_INTERVAL_MS = 100;
+const DEFAULT_CLEAR_REST_INTERVAL_COUNT = 50;
+const DEFAULT_CLEAR_REST_INTERVAL_MS = 10;
 
 /**
  * This is the handler that is used to cache the response. It is defined and exported so other middleware can directly
@@ -29,14 +29,23 @@ exports.getCacheHandler = function (options) {
 			let last;
 			let count = 0;
 			let query_start = request.url.indexOf('?');
-			let query = query_start > -1 ? request.url.slice(query_start) : [];
-			for await (let entry of HttpCache.search(query, { onlyIfCached: true, noCacheStore: true })) {
-				last = HttpCache.delete(entry.id);
-				if (count++ % CLEAR_REST_INTERVAL_COUNT === 0)
-					await new Promise((resolve) => setTimeout(resolve, CLEAR_REST_INTERVAL_MS));
-			}
-			await last;
-			return { status: 200, headers: {}, body: `Cache invalidated, invalidated ${count} entries` };
+			let query = query_start > -1 ? { url: request.url.slice(query_start) } : [];
+			const clearRestIntervalCount = options.clearRestIntervalCount ?? DEFAULT_CLEAR_REST_INTERVAL_COUNT;
+			const clearRestIntervalMs = options.clearRestIntervalMs ?? DEFAULT_CLEAR_REST_INTERVAL_MS;
+			// do this before entering the async function in case it throws
+			const searchResults = HttpCache.search(query, { onlyIfCached: true, noCacheStore: true });
+			(async () => {
+				for await (let entry of searchResults) {
+					console.error('deleting', entry.id);
+					last = HttpCache.delete(entry.id); // no context/transaction, should be non-transactional/incremental
+					if (count++ % clearRestIntervalCount === 0) {
+						await last;
+						if (clearRestIntervalMs)
+							await new Promise((resolve) => setTimeout(resolve, clearRestIntervalMs));
+					}
+				}
+			})();
+			return { status: 200, headers: {}, body: `Cache invalidation has begun` };
 		}
 		// check if the request is cacheable
 		if (request.method === 'GET') {
@@ -44,6 +53,16 @@ exports.getCacheHandler = function (options) {
 			request.cacheNextHandler = nextHandler;
 			let startTime = performance.now();
 			request.startTime = startTime;
+			// if there is a scheduled full cache clear, set it as the next expiration
+			if (options.scheduledFullCacheClearTime) { // for 5:45am EST it would 10.75
+				let now = new Date();
+				// determine the scheduled time for the full cache clear, set it as the expiration if it is sooner
+				let scheduled = new Date();
+				scheduled.setUTCHours(options.scheduledFullCacheClearTime);
+				scheduled.setUTCMinutes(options.scheduledFullCacheClearTime % 1 * 60);
+				if (scheduled < now) scheduled.setDate(scheduled.getDate() + 1);
+				request.maxAgeSeconds = Math.min((scheduled.getTime() - now.getTime()) / 1000, request.maxAgeSeconds ?? Infinity);
+			}
 			let cacheKey = request.cacheKey ?? request.url;
 			if (cacheKey.length > KEY_OVERFLOW) {
 				// Harper's max key size is 1936 bytes, so we need to hash the key if it is too long
@@ -298,3 +317,8 @@ exports.parseHeaderValue = function (value) {
 			return parsed;
 		});
 };
+
+if (process.env.HTTP_CACHE_LOAD_TEST) {
+	const { loadTest } = require('./test/loadTest');
+	loadTest();
+}
