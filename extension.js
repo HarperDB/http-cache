@@ -29,11 +29,14 @@ exports.getCacheHandler = function (options) {
 			let last;
 			let count = 0;
 			let query_start = request.url.indexOf('?');
-			let query = query_start > -1 ? request.url.slice(query_start) : [];
+			let query = query_start > -1 ? { url: request.url.slice(query_start) } : [];
 			const clearRestIntervalCount = options.clearRestIntervalCount ?? DEFAULT_CLEAR_REST_INTERVAL_COUNT;
 			const clearRestIntervalMs = options.clearRestIntervalMs ?? DEFAULT_CLEAR_REST_INTERVAL_MS;
+			// do this before entering the async function in case it throws
+			const searchResults = HttpCache.search(query, { onlyIfCached: true, noCacheStore: true });
 			(async () => {
-				for await (let entry of HttpCache.search(query, { onlyIfCached: true, noCacheStore: true })) {
+				for await (let entry of searchResults) {
+					console.error('deleting', entry.id);
 					last = HttpCache.delete(entry.id); // no context/transaction, should be non-transactional/incremental
 					if (count++ % clearRestIntervalCount === 0) {
 						await last;
@@ -50,6 +53,16 @@ exports.getCacheHandler = function (options) {
 			request.cacheNextHandler = nextHandler;
 			let startTime = performance.now();
 			request.startTime = startTime;
+			// if there is a scheduled full cache clear, set it as the next expiration
+			if (options.scheduledFullCacheClearTime) { // for 5:45am EST it would 10.75
+				let now = new Date();
+				// determine the scheduled time for the full cache clear, set it as the expiration if it is sooner
+				let scheduled = new Date();
+				scheduled.setUTCHours(options.scheduledFullCacheClearTime);
+				scheduled.setUTCMinutes(options.scheduledFullCacheClearTime % 1 * 60);
+				if (scheduled < now) scheduled.setDate(scheduled.getDate() + 1);
+				request.maxAgeSeconds = Math.min((scheduled.getTime() - now.getTime()) / 1000, request.maxAgeSeconds ?? Infinity);
+			}
 			let cacheKey = request.cacheKey ?? request.url;
 			if (cacheKey.length > KEY_OVERFLOW) {
 				// Harper's max key size is 1936 bytes, so we need to hash the key if it is too long
