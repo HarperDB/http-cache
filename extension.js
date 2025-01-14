@@ -19,7 +19,7 @@ const DEFAULT_CLEAR_REST_INTERVAL_MS = 10;
  */
 exports.getCacheHandler = function (options) {
 	return async (request, nextHandler) => {
-		if (request.method === 'POST' && request.pathname === '/invalidate') {
+		if (request.pathname === '/invalidate') {
 			if (!request.user?.role.permission.super_user) {
 				let error = new Error('Unauthorized');
 				error.statusCode = 401;
@@ -30,31 +30,44 @@ exports.getCacheHandler = function (options) {
 			let count = 0;
 			let query_start = request.url.indexOf('?');
 			let query = query_start > -1 ? { url: request.url.slice(query_start) } : [];
-			const clearRestIntervalCount = options.clearRestIntervalCount ?? DEFAULT_CLEAR_REST_INTERVAL_COUNT;
-			const clearRestIntervalMs = options.clearRestIntervalMs ?? DEFAULT_CLEAR_REST_INTERVAL_MS;
-			// do this before entering the async function in case it throws
-			const searchResults = HttpCache.search(query, { onlyIfCached: true, noCacheStore: true });
-			let finished, lastKey;
-			(async () => {
-				for await (let entry of searchResults) {
-					lastKey = entry.id;
-					last = HttpCache.delete(entry.id); // no context/transaction, should be non-transactional/incremental
-					if (count++ % clearRestIntervalCount === 0) {
-						await last;
-						if (clearRestIntervalMs)
-							await new Promise((resolve) => setTimeout(resolve, clearRestIntervalMs));
+			if (request.method === 'POST') {
+				const clearRestIntervalCount = options.clearRestIntervalCount ?? DEFAULT_CLEAR_REST_INTERVAL_COUNT;
+				const clearRestIntervalMs = options.clearRestIntervalMs ?? DEFAULT_CLEAR_REST_INTERVAL_MS;
+				// do this before entering the async function in case it throws
+				const searchResults = HttpCache.search(query, { onlyIfCached: true, noCacheStore: true });
+				let finished, lastKey;
+				(async () => {
+					for await (let entry of searchResults) {
+						lastKey = entry.id;
+						last = HttpCache.delete(entry.id); // no context/transaction, should be non-transactional/incremental
+						if (count++ % clearRestIntervalCount === 0) {
+							await last;
+							if (clearRestIntervalMs)
+								await new Promise((resolve) => setTimeout(resolve, clearRestIntervalMs));
+						}
 					}
-				}
-				finished = true;
-			})();
-			return { status: 200, headers: {}, body: (async function* () {
-				yield 'Invalidating cache...\n';
-				while (!finished) {
-					yield `Invalidated ${count} entries, last deleted ${lastKey}\n`;
-					await new Promise((resolve) => setTimeout(resolve, 1000));
-				}
-				yield 'Cache invalidation complete\n';
-			})() };
+					finished = true;
+				})();
+				return {
+					status: 200, headers: {}, body: (async function* () {
+						yield 'Invalidating cache...\n';
+						while (!finished) {
+							yield `Invalidated ${count} entries, last deleted ${lastKey}\n`;
+							await new Promise((resolve) => setTimeout(resolve, 1000));
+						}
+						yield 'Cache invalidation complete\n';
+					})()
+				};
+			} else if (request.method === 'GET') {
+				let keyStart = new URLSearchParams(query.url).get('key');
+				let searchResults = HttpCache.primaryStore.getRange({ start: keyStart ?? ' ', version: true, limit: 10, lazy: true });
+				searchResults = Array.from(searchResults);
+				return {
+					status: 200,
+					headers: {},
+					body: searchResults.map((entry) => `id: ${entry.key}\nexists: ${!!entry.value} updated: ${new Date(entry.version)}, expiresAt: ${new Date(entry.expiresAt)}`).join('\n'),
+				};
+			}
 		}
 		// check if the request is cacheable
 		if (request.method === 'GET') {
