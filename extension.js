@@ -34,9 +34,10 @@ exports.getCacheHandler = function (options) {
 			const clearRestIntervalMs = options.clearRestIntervalMs ?? DEFAULT_CLEAR_REST_INTERVAL_MS;
 			// do this before entering the async function in case it throws
 			const searchResults = HttpCache.search(query, { onlyIfCached: true, noCacheStore: true });
+			let finished, lastKey;
 			(async () => {
 				for await (let entry of searchResults) {
-					console.error('deleting', entry.id);
+					lastKey = entry.id;
 					last = HttpCache.delete(entry.id); // no context/transaction, should be non-transactional/incremental
 					if (count++ % clearRestIntervalCount === 0) {
 						await last;
@@ -44,8 +45,16 @@ exports.getCacheHandler = function (options) {
 							await new Promise((resolve) => setTimeout(resolve, clearRestIntervalMs));
 					}
 				}
+				finished = true;
 			})();
-			return { status: 200, headers: {}, body: `Cache invalidation has begun` };
+			return { status: 200, headers: {}, body: (async function* () {
+				yield 'Invalidating cache...\n';
+				while (!finished) {
+					yield `Invalidated ${count} entries, last deleted ${lastKey}\n`;
+					await new Promise((resolve) => setTimeout(resolve, 1000));
+				}
+				yield 'Cache invalidation complete\n';
+			})() };
 		}
 		// check if the request is cacheable
 		if (request.method === 'GET') {
@@ -102,7 +111,8 @@ exports.getCacheHandler = function (options) {
 				//if (request._nodeResponse.wroteHeaders) {
 				request._nodeResponse.writeHead(status, headers);
 				request._nodeResponse.end(body);
-				server.recordAnalytics(performance.now() - startTime, 'http-cache-hit', request.pathname);
+				let pathStart = request.pathname.match(/^.\w*/)?.[0] ?? request.pathname;
+				server.recordAnalytics(performance.now() - startTime, 'http-cache-hit', pathStart);
 				/*} else {
 					return {
 						status,
@@ -214,7 +224,8 @@ HttpCache.sourcedFrom({
 					headers,
 					content: blocks.length > 1 ? Buffer.concat(blocks) : blocks[0],
 				});
-				server.recordAnalytics(performance.now() - request.startTime, 'http-cache-miss', request.pathname);
+				let pathStart = request.pathname.match(/^.\w*/)?.[0] ?? request.pathname;
+				server.recordAnalytics(performance.now() - request.startTime, 'http-cache-miss', pathStart);
 			}
 			nodeResponse.write = (block) => {
 				getEncoder().write(block);
