@@ -55,17 +55,17 @@ exports.getCacheHandler = function (options) {
 							yield `Invalidated ${count} entries, last deleted ${lastKey}\n`;
 							await new Promise((resolve) => setTimeout(resolve, 1000));
 						}
-						yield 'Cache invalidation complete\n';
+						yield `Cache invalidation complete, deleted ${count} entries\n`;
 					})()
 				};
 			} else if (request.method === 'GET') {
 				let keyStart = new URLSearchParams(query.url).get('key');
-				let searchResults = HttpCache.primaryStore.getRange({ start: keyStart ?? ' ', version: true, limit: 10, lazy: true });
+				let searchResults = HttpCache.primaryStore.getRange({ start: keyStart ?? ' ', versions: true, limit: 10, lazy: true });
 				searchResults = Array.from(searchResults);
 				return {
 					status: 200,
 					headers: {},
-					body: searchResults.map((entry) => `id: ${entry.key}\nexists: ${!!entry.value} updated: ${new Date(entry.version)}, expiresAt: ${new Date(entry.expiresAt)}`).join('\n'),
+					body: searchResults.map((entry) => `id: ${entry.key}\nexists: ${!!entry.value} updated: ${new Date(entry.version).toUTCString()}, expiresAt: ${new Date(entry.expiresAt).toUTCString()}`).join('\n'),
 				};
 			}
 		}
