@@ -109,7 +109,7 @@ exports.getCacheHandler = function (options) {
 					status = 304;
 				} else {
 					body = response.content;
-					if (headers['content-encoding'] === 'br' && !request.headers.get('Accept-Encoding').includes('br')) {
+					if (headers['content-encoding'] === 'br' && !request.headers.get('Accept-Encoding')?.includes('br')) {
 						// if the client doesn't support brotli, we need to decompress the response
 						body = await new Promise((resolve) => brotliDecompress(body, (err, result) => {
 							if (err) reject(err);
