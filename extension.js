@@ -51,7 +51,7 @@ exports.getCacheHandler = function (options) {
 				return {
 					status: 200, headers: {}, body: (async function* () {
 						yield 'Invalidating cache...\n';
-						while (true) {
+						while (!finished) {
 							yield `Invalidated ${count} entries, last deleted ${lastKey}\n`;
 							await new Promise((resolve) => setTimeout(resolve, 1000));
 						}
@@ -163,7 +163,7 @@ HttpCache.sourcedFrom({
 			let encoder;
 			nodeResponse.writeHead = (status, messageOrHeaders, headers) => {
 				nodeResponse.setHeader('X-HarperDB-Cache', 'MISS');
-				let headersObject =  headers ?? messageOrHeaders;
+				let headersObject = headers ?? messageOrHeaders;
 				getEncoder(headers?.['content-encoding']); // ensure the encoder is created, and Content-Encoding is set as
 				// needed
 				if (Array.isArray(messageOrHeaders?.[0])) {
