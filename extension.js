@@ -109,7 +109,8 @@ exports.getCacheHandler = function (options) {
 					status = 304;
 				} else {
 					body = response.content;
-					if (headers['content-encoding'] === 'br' && !request.headers.get('Accept-Encoding')?.includes('br')) {
+					if (body.bytes) body = await body.bytes();// convert it from a blob to a buffer
+					if (headers['content-encoding'] === 'br' && !request.headers.get('Accept-Encoding').includes('br')) {
 						// if the client doesn't support brotli, we need to decompress the response
 						body = await new Promise((resolve) => brotliDecompress(body, (err, result) => {
 							if (err) reject(err);
@@ -162,7 +163,7 @@ HttpCache.sourcedFrom({
 			let encoder;
 			nodeResponse.writeHead = (status, messageOrHeaders, headers) => {
 				nodeResponse.setHeader('X-HarperDB-Cache', 'MISS');
-				let headersObject =  headers ?? messageOrHeaders;
+				let headersObject = headers ?? messageOrHeaders;
 				getEncoder(headers?.['content-encoding']); // ensure the encoder is created, and Content-Encoding is set as
 				// needed
 				if (Array.isArray(messageOrHeaders?.[0])) {
@@ -219,7 +220,7 @@ HttpCache.sourcedFrom({
 				blocks.push(block);
 				writeResponse.call(nodeResponse, block)
 			}
-			function endOut(block) {
+			async function endOut(block) {
 				if (block) {
 					if (typeof block === 'string') block = Buffer.from(block);
 					blocks.push(block);
@@ -231,11 +232,13 @@ HttpCache.sourcedFrom({
 				let etag = headers.etag;
 				if (!etag) headers.etag = Date.now().toString(32);
 				// cache the response, with the headers and content
+				const content = blocks.length > 1 ? Buffer.concat(blocks) : blocks[0];
 				resolve({
 					id: path,
 					expiresSWRAt,
 					headers,
-					content: blocks.length > 1 ? Buffer.concat(blocks) : blocks[0],
+					content: typeof createBlob === 'function' ? await createBlob(content) : content,
+
 				});
 				let pathStart = request.pathname.match(/^.\w*/)?.[0] ?? request.pathname;
 				server.recordAnalytics(performance.now() - request.startTime, 'http-cache-miss', pathStart);
@@ -269,7 +272,7 @@ HttpCache.sourcedFrom({
 			if (response?.then) {
 				response.then(forResponse);
 			} else forResponse(response);
-			function forResponse(response) {
+			async function forResponse(response) {
 				if (!response) return;
 				if (response.status !== 200) context.noCacheStore = true;
 				let headersObject = {};
@@ -290,7 +293,7 @@ HttpCache.sourcedFrom({
 					id: path,
 					expiresSWRAt,
 					headers: headersObject,
-					content,
+					content: typeof createBlob === 'function' ? await createBlob(content) : content, // utilize blobs if they are available
 				});
 			}
 		});
