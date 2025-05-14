@@ -1,6 +1,6 @@
 {
 	"name": "@harperdb/http-cache",
-	"version": "1.0.8",
+	"version": "1.1.0",
 	"type": "commonjs",
 	"description": "A HarperDB Component for caching HTTP requests/responses, allowing caching of data from HTTP-level components.",
 	"keywords": [
@@ -24,8 +24,7 @@
 	"scripts": {
 		"format": "prettier --write ."
 	},
-	"dependencies": {
-	},
+	"dependencies": {},
 	"devDependencies": {
 		"@harperdb/code-guidelines": "^0.0.2",
 		"prettier": "^3.3.3"
