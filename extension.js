@@ -135,8 +135,11 @@ exports.getCacheHandler = function (options) {
 							// attempt to convert it from a blob to a buffer
 							body = await body.bytes();
 						} catch (_e) {
-							await HttpCache.delete(cacheKey); // if we can't read the blob, delete it from the cache
-							return nextHandler(request);
+							try {
+								await HttpCache.delete(cacheKey); // if we can't read the blob, delete it from the cache
+							} finally {
+								return nextHandler(request);
+							}
 						}
 					}
 					if (headers['content-encoding'] === 'br' && !request.headers.get('Accept-Encoding').includes('br')) {
