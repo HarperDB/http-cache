@@ -5,6 +5,7 @@ A [HarperDB Component](https://docs.harperdb.io/docs/developers/components) for 
 ![NPM Version](https://img.shields.io/npm/v/%40harperdb%2Fhttp-cache)
 
 ## Installation
+
 Go into the HarperDB application you would building and install this package and add it to the `config.yaml` file:
 
 1. Install:
@@ -20,6 +21,7 @@ npm install @harperdb/http-cache
   package: '@harperdb/http-cache'
   files: '/*'
 ```
+
 ## Options
 
 > All configuration options are optional
