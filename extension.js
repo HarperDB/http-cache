@@ -13,6 +13,12 @@ const KEY_OVERFLOW = 1000;
 const DEFAULT_CLEAR_REST_INTERVAL_COUNT = 50;
 const DEFAULT_CLEAR_REST_INTERVAL_MS = 10;
 
+const newBlob = async (content) => {
+	const blob = await createBlob(content);
+	await blob.save(HttpCache);
+	return blob;
+};
+
 /**
  * This is the handler that is used to cache the response. It is defined and exported so other middleware can directly
  * use it and set a cacheKey or bypass the cache
@@ -42,30 +48,41 @@ exports.getCacheHandler = function (options) {
 						last = HttpCache.delete(entry.id); // no context/transaction, should be non-transactional/incremental
 						if (count++ % clearRestIntervalCount === 0) {
 							await last;
-							if (clearRestIntervalMs)
-								await new Promise((resolve) => setTimeout(resolve, clearRestIntervalMs));
+							if (clearRestIntervalMs) await new Promise((resolve) => setTimeout(resolve, clearRestIntervalMs));
 						}
 					}
 					finished = true;
 				})();
 				return {
-					status: 200, headers: {}, body: (async function* () {
+					status: 200,
+					headers: {},
+					body: (async function* () {
 						yield 'Invalidating cache...\n';
 						while (!finished) {
 							yield `Invalidated ${count} entries, last deleted ${lastKey}\n`;
 							await new Promise((resolve) => setTimeout(resolve, 1000));
 						}
 						yield `Cache invalidation complete, deleted ${count} entries\n`;
-					})()
+					})(),
 				};
 			} else if (request.method === 'GET') {
 				let keyStart = new URLSearchParams(query.url).get('key');
-				let searchResults = HttpCache.primaryStore.getRange({ start: keyStart ?? ' ', versions: true, limit: 10, lazy: true });
+				let searchResults = HttpCache.primaryStore.getRange({
+					start: keyStart ?? ' ',
+					versions: true,
+					limit: 10,
+					lazy: true,
+				});
 				searchResults = Array.from(searchResults);
 				return {
 					status: 200,
 					headers: {},
-					body: searchResults.map((entry) => `id: ${entry.key}\nexists: ${!!entry.value} updated: ${new Date(entry.version).toUTCString()}, expiresAt: ${new Date(entry.expiresAt).toUTCString()}`).join('\n'),
+					body: searchResults
+						.map(
+							(entry) =>
+								`id: ${entry.key}\nexists: ${!!entry.value} updated: ${new Date(entry.version).toUTCString()}, expiresAt: ${new Date(entry.expiresAt).toUTCString()}`
+						)
+						.join('\n'),
 				};
 			}
 		}
@@ -76,14 +93,18 @@ exports.getCacheHandler = function (options) {
 			let startTime = performance.now();
 			request.startTime = startTime;
 			// if there is a scheduled full cache clear, set it as the next expiration
-			if (options.scheduledFullCacheClearTime) { // for 5:45am EST it would 10.75
+			if (options.scheduledFullCacheClearTime) {
+				// for 5:45am EST it would 10.75
 				let now = new Date();
 				// determine the scheduled time for the full cache clear, set it as the expiration if it is sooner
 				let scheduled = new Date();
 				scheduled.setUTCHours(options.scheduledFullCacheClearTime);
-				scheduled.setUTCMinutes(options.scheduledFullCacheClearTime % 1 * 60);
+				scheduled.setUTCMinutes((options.scheduledFullCacheClearTime % 1) * 60);
 				if (scheduled < now) scheduled.setDate(scheduled.getDate() + 1);
-				request.maxAgeSeconds = Math.min((scheduled.getTime() - now.getTime()) / 1000, request.maxAgeSeconds ?? Infinity);
+				request.maxAgeSeconds = Math.min(
+					(scheduled.getTime() - now.getTime()) / 1000,
+					request.maxAgeSeconds ?? Infinity
+				);
 			}
 			let cacheKey = request.cacheKey ?? request.url;
 			if (cacheKey.length > KEY_OVERFLOW) {
@@ -102,20 +123,30 @@ exports.getCacheHandler = function (options) {
 				let status = response.status ?? 200;
 				let body;
 				let age = Math.round((Date.now() - response.getUpdatedTime()) / 1000);
-				headers = { ...headers, 'X-HarperDB-Cache': 'HIT', Age: age };
+				headers = { ...headers, 'X-HarperDB-Cache': 'HIT', 'Age': age };
 				delete headers['x-harperdb-cache'];
 				delete headers['content-length'];
 				if (ifNoneMatch && ifNoneMatch === etag) {
 					status = 304;
 				} else {
 					body = response.content;
-					if (body.bytes) body = await body.bytes();// convert it from a blob to a buffer
+					if (body.bytes) {
+						try {
+							// attempt to convert it from a blob to a buffer
+							body = await body.bytes();
+						} catch (_e) {
+							await HttpCache.delete(cacheKey); // if we can't read the blob, delete it from the cache
+							return nextHandler(request);
+						}
+					}
 					if (headers['content-encoding'] === 'br' && !request.headers.get('Accept-Encoding').includes('br')) {
 						// if the client doesn't support brotli, we need to decompress the response
-						body = await new Promise((resolve) => brotliDecompress(body, (err, result) => {
-							if (err) reject(err);
-							else resolve(result);
-						}));
+						body = await new Promise((resolve) =>
+							brotliDecompress(body, (err, result) => {
+								if (err) reject(err);
+								else resolve(result);
+							})
+						);
 						delete headers['content-encoding'];
 					}
 					headers['Content-Length'] = body.length;
@@ -181,8 +212,7 @@ HttpCache.sourcedFrom({
 				if (acceptEncoding.includes('br')) {
 					request.headers.set('Accept-Encoding', 'br');
 					acceptsBrotli = true;
-				}
-				else request.headers.delete('Accept-Encoding');
+				} else request.headers.delete('Accept-Encoding');
 			}
 			function getEncoder() {
 				if (encoder) return encoder;
@@ -201,11 +231,12 @@ HttpCache.sourcedFrom({
 									: constants.BROTLI_MODE_GENERIC,
 							[constants.BROTLI_PARAM_QUALITY]: 2, // go fast
 						},
-					})
+					});
 					encoder.on('data', writeOut);
 					encoder.on('end', endOut);
 				} else {
-					encoder = { // default direct encoder
+					encoder = {
+						// default direct encoder
 						write: writeOut,
 						end: endOut,
 					};
@@ -218,7 +249,7 @@ HttpCache.sourcedFrom({
 			function writeOut(block) {
 				if (typeof block === 'string') block = Buffer.from(block);
 				blocks.push(block);
-				writeResponse.call(nodeResponse, block)
+				writeResponse.call(nodeResponse, block);
 			}
 			async function endOut(block) {
 				if (block) {
@@ -237,8 +268,7 @@ HttpCache.sourcedFrom({
 					id: path,
 					expiresSWRAt,
 					headers,
-					content: typeof createBlob === 'function' ? await createBlob(content) : content,
-
+					content: typeof createBlob === 'function' ? await newBlob(content) : content,
 				});
 				let pathStart = request.pathname.match(/^.\w*/)?.[0] ?? request.pathname;
 				server.recordAnalytics(performance.now() - request.startTime, 'http-cache-miss', pathStart);
@@ -293,7 +323,7 @@ HttpCache.sourcedFrom({
 					id: path,
 					expiresSWRAt,
 					headers: headersObject,
-					content: typeof createBlob === 'function' ? await createBlob(content) : content, // utilize blobs if they are available
+					content: typeof createBlob === 'function' ? await newBlob(content) : content, // utilize blobs if they are available
 				});
 			}
 		});
